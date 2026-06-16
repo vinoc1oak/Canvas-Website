@@ -1,0 +1,532 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Morphing Line Field</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+      touch-action: none;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+    }
+
+    #menuButton {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 5;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(0,0,0,0.34);
+      color: white;
+      font-size: 22px;
+      backdrop-filter: blur(10px);
+    }
+
+    #panel {
+      position: fixed;
+      top: 66px;
+      right: 14px;
+      z-index: 5;
+      width: 230px;
+      padding: 14px;
+      border-radius: 16px;
+      color: white;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.18);
+      backdrop-filter: blur(12px);
+      display: none;
+    }
+
+    #panel.open {
+      display: block;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      margin-top: 10px;
+      color: #ccc;
+    }
+
+    input, button {
+      width: 100%;
+      margin-top: 6px;
+    }
+
+    button {
+      padding: 9px;
+      border-radius: 10px;
+      border: none;
+      font-weight: bold;
+    }
+
+    .title {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+
+<body>
+<canvas id="canvas"></canvas>
+
+<button id="menuButton">☰</button>
+
+<div id="panel">
+  <div class="title">MORPH FIELD</div>
+
+  <label>Line Distance</label>
+  <input id="distance" type="range" min="70" max="180" value="120">
+
+  <label>Trail Fade</label>
+  <input id="fade" type="range" min="3" max="16" value="7">
+
+  <label>Max Particles</label>
+  <input id="maxParticles" type="range" min="180" max="560" value="360">
+
+  <button id="autoBtn">Toggle Auto</button>
+  <button id="clearBtn">Clear</button>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const menuButton = document.getElementById("menuButton");
+const panel = document.getElementById("panel");
+const distanceInput = document.getElementById("distance");
+const fadeInput = document.getElementById("fade");
+const maxParticlesInput = document.getElementById("maxParticles");
+const autoBtn = document.getElementById("autoBtn");
+const clearBtn = document.getElementById("clearBtn");
+
+let w, h, dpr;
+let particles = [];
+let forms = [];
+let bolts = [];
+let hue = 0;
+let frame = 0;
+let auto = false;
+let pointerDown = false;
+let lastX = null;
+let lastY = null;
+let lastEffectFrame = 0;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  w = window.innerWidth;
+  h = window.innerHeight;
+
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+}
+
+resize();
+window.addEventListener("resize", resize);
+
+menuButton.onclick = () => panel.classList.toggle("open");
+autoBtn.onclick = () => auto = !auto;
+
+clearBtn.onclick = () => {
+  particles.length = 0;
+  forms.length = 0;
+  bolts.length = 0;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+};
+
+function rand(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function capParticles() {
+  const max = Number(maxParticlesInput.value);
+  if (particles.length > max) particles.splice(0, particles.length - max);
+}
+
+function addParticle(x, y, vx, vy, life, colorHue, size = 1, orbit = 0) {
+  particles.push({
+    x, y,
+    px: x, py: y,
+    vx, vy,
+    life,
+    startLife: life,
+    hue: colorHue,
+    size,
+    orbit,
+    spin: rand(-0.035, 0.035)
+  });
+}
+
+function addFlow(x, y, amount = 2) {
+  for (let i = 0; i < amount; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(0.25, 1.35);
+    addParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.85, 1.25), hue + rand(0, 90), 1);
+  }
+  capParticles();
+}
+
+function effectSpiral(x, y) {
+  const count = 34;
+  const direction = Math.random() < 0.5 ? 1 : -1;
+
+  for (let i = 0; i < count; i++) {
+    const a = i * 0.48 * direction;
+    const s = 0.9 + i * 0.028;
+    addParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(1.1, 1.8), hue + i * 6, 1.1, direction);
+  }
+
+  forms.push({
+    type: "arc",
+    x, y,
+    r: 8,
+    speed: 2.1,
+    life: 1,
+    hue: hue + 45,
+    spin: direction,
+    phase: rand(0, Math.PI * 2)
+  });
+}
+
+function effectBloom(x, y) {
+  const count = 46;
+
+  for (let i = 0; i < count; i++) {
+    const a = (Math.PI * 2 * i) / count + rand(-0.08, 0.08);
+    const s = rand(1.4, 4.5);
+    addParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.95, 1.45), hue + i * 4, 1.15);
+  }
+
+  forms.push({
+    type: "ring",
+    x, y,
+    r: 4,
+    speed: 4.3,
+    life: 1,
+    hue: hue + 220,
+    phase: rand(0, Math.PI * 2)
+  });
+}
+
+function effectOrbit(x, y) {
+  for (let ring = 0; ring < 3; ring++) {
+    forms.push({
+      type: "arc",
+      x, y,
+      r: 22 + ring * 18,
+      speed: 1.25 + ring * 0.35,
+      life: 1,
+      hue: hue + ring * 45,
+      spin: ring % 2 ? -1 : 1,
+      phase: rand(0, Math.PI * 2)
+    });
+  }
+
+  for (let i = 0; i < 28; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(0.7, 2.2);
+    addParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(1.1, 1.9), hue + 120 + i * 3, 1, 1);
+  }
+}
+
+function effectWeb(x, y) {
+  for (let b = 0; b < 5; b++) {
+    let cx = x;
+    let cy = y;
+    const points = [{ x: cx, y: cy }];
+    const a = rand(0, Math.PI * 2);
+
+    for (let i = 0; i < 7; i++) {
+      cx += Math.cos(a) * rand(16, 30) + rand(-20, 20);
+      cy += Math.sin(a) * rand(16, 30) + rand(-20, 20);
+      points.push({ x: cx, y: cy });
+    }
+
+    bolts.push({
+      points,
+      life: 1,
+      hue: hue + rand(150, 260)
+    });
+  }
+
+  addFlow(x, y, 10);
+}
+
+function randomEffect(x, y, force = false) {
+  if (!force && frame - lastEffectFrame < 12) return;
+  lastEffectFrame = frame;
+
+  const r = Math.random();
+
+  if (r < 0.28) effectSpiral(x, y);
+  else if (r < 0.54) effectBloom(x, y);
+  else if (r < 0.78) effectOrbit(x, y);
+  else effectWeb(x, y);
+
+  capParticles();
+
+  if (forms.length > 26) forms.splice(0, forms.length - 26);
+  if (bolts.length > 12) bolts.splice(0, bolts.length - 12);
+}
+
+function moveInput(x, y) {
+  if (lastX !== null) {
+    const dx = x - lastX;
+    const dy = y - lastY;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist < 4) return;
+
+    const steps = Math.min(5, Math.floor(dist / 18) + 1);
+
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps;
+      const px = lastX + dx * t;
+      const py = lastY + dy * t;
+
+      addFlow(px, py, 1);
+
+      if (pointerDown && Math.random() < 0.08) {
+        randomEffect(px, py, false);
+      }
+    }
+  }
+
+  lastX = x;
+  lastY = y;
+}
+
+window.addEventListener("pointerdown", e => {
+  pointerDown = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  randomEffect(e.clientX, e.clientY, true);
+});
+
+window.addEventListener("pointermove", e => {
+  moveInput(e.clientX, e.clientY);
+});
+
+window.addEventListener("pointerup", () => {
+  pointerDown = false;
+  lastX = null;
+  lastY = null;
+});
+
+window.addEventListener("pointercancel", () => {
+  pointerDown = false;
+  lastX = null;
+  lastY = null;
+});
+
+function autoMotion() {
+  const x = w / 2 + Math.cos(frame * 0.015) * w * 0.33 + Math.sin(frame * 0.039) * 90;
+  const y = h / 2 + Math.sin(frame * 0.019) * h * 0.33 + Math.cos(frame * 0.031) * 90;
+
+  if (frame % 2 === 0) addFlow(x, y, 1);
+  if (frame % 170 === 0) randomEffect(x, y, true);
+}
+
+function drawForms() {
+  ctx.lineCap = "round";
+
+  for (let i = forms.length - 1; i >= 0; i--) {
+    const f = forms[i];
+
+    f.r += f.speed;
+    f.life -= 0.009;
+
+    const alpha = Math.max(0, f.life);
+    const wobble = Math.sin(frame * 0.045 + f.phase) * 9;
+
+    if (f.type === "ring") {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r + wobble, 0, Math.PI * 2);
+      ctx.strokeStyle = `hsla(${f.hue},100%,64%,${alpha * 0.62})`;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * 0.48 + wobble * 0.3, 0, Math.PI * 2);
+      ctx.strokeStyle = `hsla(${f.hue + 80},100%,58%,${alpha * 0.28})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    if (f.type === "arc") {
+      const start = frame * 0.033 * f.spin + f.phase;
+      const span = Math.PI * (1.1 + 0.25 * Math.sin(frame * 0.03 + f.phase));
+
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r + wobble * 0.4, start, start + span);
+      ctx.strokeStyle = `hsla(${f.hue},100%,65%,${alpha * 0.56})`;
+      ctx.lineWidth = 1.35;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * 0.62, -start, -start + span * 0.74);
+      ctx.strokeStyle = `hsla(${f.hue + 95},100%,60%,${alpha * 0.33})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    if (f.life <= 0 || f.r > Math.max(w, h) * 0.65) {
+      forms.splice(i, 1);
+    }
+  }
+}
+
+function drawBolts() {
+  for (let i = bolts.length - 1; i >= 0; i--) {
+    const b = bolts[i];
+    b.life -= 0.045;
+
+    ctx.beginPath();
+    ctx.moveTo(b.points[0].x, b.points[0].y);
+
+    for (let j = 1; j < b.points.length; j++) {
+      ctx.lineTo(
+        b.points[j].x + rand(-1.5, 1.5),
+        b.points[j].y + rand(-1.5, 1.5)
+      );
+    }
+
+    ctx.strokeStyle = `hsla(${b.hue},100%,68%,${b.life * 0.72})`;
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+
+    if (b.life <= 0) bolts.splice(i, 1);
+  }
+}
+
+function drawParticlesAndLinks() {
+  const maxDist = Number(distanceInput.value);
+  const maxSq = maxDist * maxDist;
+  const cellSize = maxDist;
+  const grid = new Map();
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+
+    p.px = p.x;
+    p.py = p.y;
+
+    if (p.orbit) {
+      const a = p.spin;
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      const vx = p.vx * cos - p.vy * sin;
+      const vy = p.vx * sin + p.vy * cos;
+      p.vx = vx;
+      p.vy = vy;
+    }
+
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.989;
+    p.vy *= 0.989;
+    p.life -= 0.0058;
+
+    if (p.life <= 0 || p.x < -100 || p.x > w + 100 || p.y < -100 || p.y > h + 100) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    const key = Math.floor(p.x / cellSize) + "," + Math.floor(p.y / cellSize);
+    let bucket = grid.get(key);
+
+    if (!bucket) {
+      bucket = [];
+      grid.set(key, bucket);
+    }
+
+    bucket.push(p);
+  }
+
+  ctx.lineCap = "round";
+  ctx.lineWidth = 1;
+
+  for (const p of particles) {
+    const ageAlpha = Math.min(1, p.life / p.startLife);
+
+    ctx.beginPath();
+    ctx.moveTo(p.px, p.py);
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = `hsla(${p.hue},100%,64%,${ageAlpha * 0.75})`;
+    ctx.stroke();
+
+    const cx = Math.floor(p.x / cellSize);
+    const cy = Math.floor(p.y / cellSize);
+
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const nearby = grid.get(gx + "," + gy);
+        if (!nearby) continue;
+
+        for (let i = 0; i < nearby.length; i++) {
+          const q = nearby[i];
+          if (p === q) continue;
+
+          const dx = p.x - q.x;
+          const dy = p.y - q.y;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq < maxSq) {
+            const alpha = (1 - distSq / maxSq) * 0.22 * p.life * q.life;
+
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = `hsla(${(p.hue + q.hue) * 0.5},100%,60%,${alpha})`;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+}
+
+function draw() {
+  frame++;
+  hue = (hue + 0.52) % 360;
+
+  const fade = Number(fadeInput.value) / 100;
+  ctx.fillStyle = `rgba(0,0,0,${fade})`;
+  ctx.fillRect(0, 0, w, h);
+
+  if (auto) autoMotion();
+
+  drawForms();
+  drawBolts();
+  drawParticlesAndLinks();
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
