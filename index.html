@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Canvas Line Art</title>
+  <style>
+    html, body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      height: 100%;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let w, h;
+let points = [];
+let mouse = { x: 0, y: 0 };
+
+function resize() {
+  w = canvas.width = window.innerWidth;
+  h = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+function addPoint(x, y) {
+  points.push({
+    x,
+    y,
+    vx: (Math.random() - 0.5) * 2,
+    vy: (Math.random() - 0.5) * 2,
+    life: 1,
+    hue: Math.random() * 360
+  });
+
+  if (points.length > 250) points.shift();
+}
+
+window.addEventListener("mousemove", e => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+  addPoint(mouse.x, mouse.y);
+});
+
+window.addEventListener("touchmove", e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  addPoint(t.clientX, t.clientY);
+}, { passive: false });
+
+function animate() {
+  ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+  ctx.fillRect(0, 0, w, h);
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 0.006;
+
+    for (let j = i + 1; j < points.length; j++) {
+      const q = points[j];
+      const dx = p.x - q.x;
+      const dy = p.y - q.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < 130) {
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.strokeStyle = `hsla(${p.hue}, 100%, 60%, ${1 - dist / 130})`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+  }
+
+  points = points.filter(p => p.life > 0);
+
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>
