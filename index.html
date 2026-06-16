@@ -1,0 +1,497 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Abstract Line Field</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+      touch-action: none;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+    }
+
+    #menuButton {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 5;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(0,0,0,0.38);
+      color: white;
+      font-size: 22px;
+      backdrop-filter: blur(10px);
+    }
+
+    #panel {
+      position: fixed;
+      top: 66px;
+      right: 14px;
+      z-index: 5;
+      width: 230px;
+      padding: 14px;
+      border-radius: 16px;
+      color: white;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.2);
+      backdrop-filter: blur(12px);
+      display: none;
+    }
+
+    #panel.open {
+      display: block;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      margin-top: 10px;
+      color: #ccc;
+    }
+
+    input, button {
+      width: 100%;
+      margin-top: 6px;
+    }
+
+    button {
+      padding: 9px;
+      border-radius: 10px;
+      border: none;
+      font-weight: bold;
+    }
+
+    .title {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+
+<body>
+<canvas id="canvas"></canvas>
+
+<button id="menuButton">☰</button>
+
+<div id="panel">
+  <div class="title">ABSTRACT FIELD</div>
+
+  <label>Line Distance</label>
+  <input id="distance" type="range" min="60" max="180" value="115">
+
+  <label>Trail Fade</label>
+  <input id="fade" type="range" min="4" max="22" value="10">
+
+  <label>Max Particles</label>
+  <input id="maxParticles" type="range" min="160" max="620" value="340">
+
+  <button id="autoBtn">Toggle Auto</button>
+  <button id="clearBtn">Clear</button>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const menuButton = document.getElementById("menuButton");
+const panel = document.getElementById("panel");
+const distanceInput = document.getElementById("distance");
+const fadeInput = document.getElementById("fade");
+const maxParticlesInput = document.getElementById("maxParticles");
+const autoBtn = document.getElementById("autoBtn");
+const clearBtn = document.getElementById("clearBtn");
+
+let w, h, dpr;
+let particles = [];
+let pulses = [];
+let arcs = [];
+let bolts = [];
+let hue = 0;
+let auto = false;
+let frame = 0;
+let lastX = null;
+let lastY = null;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  w = window.innerWidth;
+  h = window.innerHeight;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+}
+
+resize();
+window.addEventListener("resize", resize);
+
+menuButton.onclick = () => panel.classList.toggle("open");
+autoBtn.onclick = () => auto = !auto;
+
+clearBtn.onclick = () => {
+  particles = [];
+  pulses = [];
+  arcs = [];
+  bolts = [];
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+};
+
+function capParticles() {
+  const max = Number(maxParticlesInput.value);
+  if (particles.length > max) {
+    particles.splice(0, particles.length - max);
+  }
+}
+
+function particle(x, y, vx, vy, life, colorHue, size = 1) {
+  particles.push({
+    x, y,
+    px: x, py: y,
+    vx, vy,
+    life,
+    hue: colorHue,
+    size
+  });
+}
+
+function addFlow(x, y) {
+  for (let i = 0; i < 2; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = Math.random() * 1.25;
+    particle(x, y, Math.cos(a) * s, Math.sin(a) * s, 1, hue + Math.random() * 70);
+  }
+  capParticles();
+}
+
+function spiralBloom(x, y) {
+  for (let i = 0; i < 46; i++) {
+    const a = i * 0.42;
+    const s = 1.2 + i * 0.035;
+    particle(x, y, Math.cos(a) * s, Math.sin(a) * s, 1, hue + i * 5, 1.2);
+  }
+
+  arcs.push({
+    x, y,
+    r: 8,
+    max: 170,
+    life: 1,
+    hue: hue + 40,
+    spin: 1
+  });
+}
+
+function lightningWeb(x, y) {
+  for (let b = 0; b < 8; b++) {
+    const points = [];
+    let cx = x;
+    let cy = y;
+    const angle = Math.random() * Math.PI * 2;
+
+    points.push({ x: cx, y: cy });
+
+    for (let i = 0; i < 8; i++) {
+      cx += Math.cos(angle) * 24 + (Math.random() - 0.5) * 34;
+      cy += Math.sin(angle) * 24 + (Math.random() - 0.5) * 34;
+      points.push({ x: cx, y: cy });
+    }
+
+    bolts.push({
+      points,
+      life: 1,
+      hue: hue + 180 + Math.random() * 60
+    });
+  }
+
+  for (let i = 0; i < 24; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 2 + Math.random() * 3.2;
+    particle(x, y, Math.cos(a) * s, Math.sin(a) * s, 0.85, hue + 190, 1);
+  }
+}
+
+function orbitalRings(x, y) {
+  for (let i = 0; i < 4; i++) {
+    arcs.push({
+      x, y,
+      r: 20 + i * 18,
+      max: 120 + i * 28,
+      life: 1,
+      hue: hue + i * 30,
+      spin: i % 2 === 0 ? 1 : -1
+    });
+  }
+
+  for (let i = 0; i < 36; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 0.8 + Math.random() * 2.4;
+    particle(x, y, Math.cos(a) * s, Math.sin(a) * s, 1, hue + 90 + i * 2, 1.1);
+  }
+}
+
+function shockwave(x, y) {
+  pulses.push({
+    x, y,
+    r: 4,
+    life: 1,
+    hue: hue + 300
+  });
+
+  for (let i = 0; i < 64; i++) {
+    const a = (Math.PI * 2 * i) / 64;
+    const jitter = (Math.random() - 0.5) * 0.4;
+    const s = 2.4 + Math.random() * 3.5;
+    particle(
+      x,
+      y,
+      Math.cos(a + jitter) * s,
+      Math.sin(a + jitter) * s,
+      1,
+      hue + i * 4,
+      1.2
+    );
+  }
+}
+
+function quadrantEffect(x, y) {
+  const left = x < w / 2;
+  const top = y < h / 2;
+
+  if (left && top) spiralBloom(x, y);
+  else if (!left && top) lightningWeb(x, y);
+  else if (left && !top) orbitalRings(x, y);
+  else shockwave(x, y);
+
+  capParticles();
+}
+
+function moveInput(x, y) {
+  if (lastX !== null) {
+    const dx = x - lastX;
+    const dy = y - lastY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 4) return;
+
+    const steps = Math.min(5, Math.floor(dist / 18) + 1);
+
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps;
+      addFlow(lastX + dx * t, lastY + dy * t);
+    }
+  }
+
+  lastX = x;
+  lastY = y;
+}
+
+window.addEventListener("pointermove", e => {
+  moveInput(e.clientX, e.clientY);
+});
+
+window.addEventListener("pointerdown", e => {
+  lastX = e.clientX;
+  lastY = e.clientY;
+  quadrantEffect(e.clientX, e.clientY);
+});
+
+window.addEventListener("pointerup", () => {
+  lastX = null;
+  lastY = null;
+});
+
+function autoMotion() {
+  const x = w / 2 + Math.cos(frame * 0.018) * w * 0.34 + Math.sin(frame * 0.041) * 80;
+  const y = h / 2 + Math.sin(frame * 0.022) * h * 0.34 + Math.cos(frame * 0.035) * 80;
+
+  if (frame % 2 === 0) addFlow(x, y);
+  if (frame % 140 === 0) quadrantEffect(x, y);
+}
+
+function drawPulses() {
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    const p = pulses[i];
+
+    p.r += 5.8;
+    p.life -= 0.022;
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${p.hue},100%,65%,${p.life * 0.75})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * 0.55, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${p.hue + 40},100%,60%,${p.life * 0.35})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (p.life <= 0) pulses.splice(i, 1);
+  }
+}
+
+function drawArcs() {
+  for (let i = arcs.length - 1; i >= 0; i--) {
+    const a = arcs[i];
+
+    a.r += 2.6;
+    a.life -= 0.016;
+
+    const start = frame * 0.035 * a.spin;
+    const span = Math.PI * 1.35;
+
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, a.r, start, start + span);
+    ctx.strokeStyle = `hsla(${a.hue},100%,65%,${a.life * 0.65})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, a.r * 0.63, -start, -start + span * 0.72);
+    ctx.strokeStyle = `hsla(${a.hue + 70},100%,60%,${a.life * 0.4})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (a.life <= 0 || a.r > a.max) arcs.splice(i, 1);
+  }
+}
+
+function drawBolts() {
+  for (let i = bolts.length - 1; i >= 0; i--) {
+    const b = bolts[i];
+
+    b.life -= 0.06;
+
+    ctx.beginPath();
+    ctx.moveTo(b.points[0].x, b.points[0].y);
+
+    for (let j = 1; j < b.points.length; j++) {
+      ctx.lineTo(
+        b.points[j].x + (Math.random() - 0.5) * 2,
+        b.points[j].y + (Math.random() - 0.5) * 2
+      );
+    }
+
+    ctx.strokeStyle = `hsla(${b.hue},100%,70%,${b.life})`;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    if (b.life <= 0) bolts.splice(i, 1);
+  }
+}
+
+function drawParticlesAndLinks() {
+  const maxDist = Number(distanceInput.value);
+  const maxSq = maxDist * maxDist;
+  const cellSize = maxDist;
+  const grid = new Map();
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+
+    p.px = p.x;
+    p.py = p.y;
+
+    p.x += p.vx;
+    p.y += p.vy;
+
+    p.vx *= 0.986;
+    p.vy *= 0.986;
+    p.life -= 0.008;
+
+    if (p.life <= 0 || p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    const cx = Math.floor(p.x / cellSize);
+    const cy = Math.floor(p.y / cellSize);
+    const key = cx + "," + cy;
+
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(p);
+  }
+
+  ctx.lineCap = "round";
+  ctx.lineWidth = 1;
+
+  for (const p of particles) {
+    ctx.beginPath();
+    ctx.moveTo(p.px, p.py);
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = `hsla(${p.hue},100%,65%,${p.life})`;
+    ctx.stroke();
+
+    const cx = Math.floor(p.x / cellSize);
+    const cy = Math.floor(p.y / cellSize);
+
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const nearby = grid.get(gx + "," + gy);
+        if (!nearby) continue;
+
+        for (const q of nearby) {
+          if (p === q) continue;
+
+          const dx = p.x - q.x;
+          const dy = p.y - q.y;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq < maxSq) {
+            const alpha = (1 - distSq / maxSq) * 0.25 * p.life * q.life;
+
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = `hsla(${(p.hue + q.hue) / 2},100%,60%,${alpha})`;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+}
+
+function draw() {
+  frame++;
+  hue += 0.58;
+
+  const fade = Number(fadeInput.value) / 100;
+  ctx.fillStyle = `rgba(0,0,0,${fade})`;
+  ctx.fillRect(0, 0, w, h);
+
+  if (auto) autoMotion();
+
+  drawPulses();
+  drawArcs();
+  drawBolts();
+  drawParticlesAndLinks();
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
