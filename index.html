@@ -1,0 +1,790 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Reactive Field</title>
+
+<style>
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  touch-action: none;
+  font-family: Arial, sans-serif;
+}
+
+canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+}
+
+#menuBtn {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 20;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.25);
+  background: rgba(0,0,0,.45);
+  color: white;
+  font-size: 24px;
+}
+
+#panel {
+  position: fixed;
+  top: 70px;
+  right: 14px;
+  z-index: 20;
+  width: 250px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(0,0,0,.68);
+  border: 1px solid rgba(255,255,255,.18);
+  color: white;
+  display: none;
+}
+
+#panel.open {
+  display: block;
+}
+
+label {
+  font-size: 12px;
+  color: #bbb;
+  display: block;
+  margin-top: 10px;
+}
+
+input, button {
+  width: 100%;
+  margin-top: 6px;
+}
+
+button {
+  padding: 9px;
+  border: none;
+  border-radius: 10px;
+  font-weight: bold;
+}
+
+#player {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 30;
+  width: 290px;
+  height: 42px;
+  opacity: .95;
+  pointer-events: auto;
+  touch-action: auto;
+}
+
+.status {
+  font-size: 11px;
+  color: #aaa;
+  margin-top: 10px;
+  line-height: 1.35;
+}
+</style>
+</head>
+
+<body>
+<canvas id="canvas"></canvas>
+
+<button id="menuBtn">☰</button>
+
+<audio id="player" controls playsinline></audio>
+
+<div id="panel">
+  <strong>AUDIO FIELD</strong>
+
+  <label>Upload MP3</label>
+  <input id="fileInput" type="file" accept="audio/*">
+
+  <label>Visual Intensity</label>
+  <input id="intensity" type="range" min="70" max="160" value="110">
+
+  <label>Trail Fade</label>
+  <input id="fade" type="range" min="4" max="18" value="8">
+
+  <label>Particle Limit</label>
+  <input id="limit" type="range" min="180" max="520" value="340">
+
+  <button id="clearBtn">Clear</button>
+
+  <div id="status" class="status">
+    Upload a song, then press play on the audio bar.
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const menuBtn = document.getElementById("menuBtn");
+const panel = document.getElementById("panel");
+const fileInput = document.getElementById("fileInput");
+const player = document.getElementById("player");
+const statusEl = document.getElementById("status");
+const clearBtn = document.getElementById("clearBtn");
+const fadeSlider = document.getElementById("fade");
+const intensitySlider = document.getElementById("intensity");
+const limitSlider = document.getElementById("limit");
+
+let w, h, dpr;
+let frame = 0;
+let hue = 0;
+
+let audioCtx = null;
+let audioBuffer = null;
+let audioData = null;
+let sampleRate = 44100;
+
+let bass = 0;
+let mids = 0;
+let highs = 0;
+let volume = 0;
+let smoothBass = 0;
+let smoothMids = 0;
+let smoothHighs = 0;
+let smoothVolume = 0;
+let energyHistory = [];
+let beatCooldown = 0;
+let buildup = 0;
+
+const particles = [];
+const rings = [];
+const bolts = [];
+const sparks = [];
+
+const MAX_RINGS = 26;
+const MAX_BOLTS = 12;
+const MAX_SPARKS = 75;
+const LINE_BUDGET = 1450;
+
+let pointerDown = false;
+let lastX = null;
+let lastY = null;
+let lastManualEffect = -999;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 1.55);
+  w = window.innerWidth;
+  h = window.innerHeight;
+
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+}
+
+resize();
+window.addEventListener("resize", resize);
+
+menuBtn.onclick = () => panel.classList.toggle("open");
+
+clearBtn.onclick = () => {
+  particles.length = 0;
+  rings.length = 0;
+  bolts.length = 0;
+  sparks.length = 0;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+};
+
+function rand(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function trim(arr, max) {
+  if (arr.length > max) arr.splice(0, arr.length - max);
+}
+
+function capParticles() {
+  const max = Number(limitSlider.value);
+  if (particles.length > max) {
+    particles.splice(0, particles.length - max);
+  }
+}
+
+fileInput.onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  statusEl.textContent = "Loading song...";
+
+  const url = URL.createObjectURL(file);
+  player.src = url;
+  player.load();
+
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const arrayBuffer = await file.arrayBuffer();
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    audioData = audioBuffer.getChannelData(0);
+    sampleRate = audioBuffer.sampleRate;
+
+    statusEl.textContent = "Loaded. Press play on the audio bar.";
+  } catch (err) {
+    audioBuffer = null;
+    audioData = null;
+    statusEl.textContent = "Audio will play, but analysis failed. Try another MP3.";
+  }
+};
+
+player.addEventListener("play", () => {
+  statusEl.textContent = "Playing. Visuals are synced to the song.";
+});
+
+player.addEventListener("pause", () => {
+  statusEl.textContent = "Paused.";
+});
+
+function analyzeSong() {
+  if (!audioData || player.paused) {
+    smoothBass *= .94;
+    smoothMids *= .94;
+    smoothHighs *= .94;
+    smoothVolume *= .94;
+    buildup *= .97;
+    return false;
+  }
+
+  const t = player.currentTime;
+  const center = Math.floor(t * sampleRate);
+  const size = 1024;
+
+  let low = 0;
+  let mid = 0;
+  let high = 0;
+  let total = 0;
+
+  let prev = audioData[Math.max(0, center - size)] || 0;
+  let slow = 0;
+
+  for (let i = 0; i < size; i++) {
+    const index = center + i - size / 2;
+
+    if (index < 1 || index >= audioData.length) continue;
+
+    const v = audioData[index];
+    const abs = Math.abs(v);
+
+    slow = slow * .96 + v * .04;
+
+    low += Math.abs(slow);
+    mid += Math.abs(v - slow);
+    high += Math.abs(v - prev);
+    total += abs;
+
+    prev = v;
+  }
+
+  bass = Math.min(1, low / size * 7.5);
+  mids = Math.min(1, mid / size * 10);
+  highs = Math.min(1, high / size * 7);
+  volume = Math.min(1, total / size * 5.5);
+
+  smoothBass = smoothBass * .78 + bass * .22;
+  smoothMids = smoothMids * .84 + mids * .16;
+  smoothHighs = smoothHighs * .78 + highs * .22;
+  smoothVolume = smoothVolume * .86 + volume * .14;
+
+  const energy = volume * .8 + bass * .95 + highs * .22;
+
+  energyHistory.push(energy);
+  if (energyHistory.length > 70) energyHistory.shift();
+
+  let avg = 0;
+  for (let i = 0; i < energyHistory.length; i++) avg += energyHistory[i];
+  avg /= energyHistory.length || 1;
+
+  buildup = buildup * .985 + Math.max(0, energy - avg) * .18 + smoothVolume * .008;
+  buildup = Math.min(1.6, buildup);
+
+  beatCooldown--;
+
+  const beat = beatCooldown <= 0 && energy > Math.max(.18, avg * 1.28);
+
+  if (beat) beatCooldown = 13;
+
+  return beat;
+}
+
+function addParticle(x, y, vx, vy, life, colorHue, spin = 0) {
+  particles.push({
+    x, y,
+    px: x,
+    py: y,
+    vx,
+    vy,
+    life,
+    maxLife: life,
+    hue: colorHue,
+    spin
+  });
+}
+
+function addRing(x, y, speed, colorHue, life = 1) {
+  rings.push({
+    x, y,
+    r: 3,
+    speed,
+    life,
+    hue: colorHue,
+    phase: rand(0, Math.PI * 2),
+    spin: Math.random() < .5 ? -1 : 1
+  });
+
+  trim(rings, MAX_RINGS);
+}
+
+function addSpark(x, y, vx, vy, life, colorHue) {
+  sparks.push({ x, y, px: x, py: y, vx, vy, life, hue: colorHue });
+  trim(sparks, MAX_SPARKS);
+}
+
+function addFlow(x, y, amount = 1) {
+  for (let i = 0; i < amount; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(.25, 1.2 + smoothBass * 1.8);
+    addParticle(
+      x,
+      y,
+      Math.cos(a) * s,
+      Math.sin(a) * s,
+      rand(.75, 1.25),
+      hue + rand(0, 90)
+    );
+  }
+}
+
+function bloom(x, y, power = 1) {
+  const count = Math.floor(26 + power * 20);
+
+  for (let i = 0; i < count; i++) {
+    const a = Math.PI * 2 * i / count + rand(-.06, .06);
+    const s = rand(1.4, 4.2 + power * 2.2);
+
+    addParticle(
+      x,
+      y,
+      Math.cos(a) * s,
+      Math.sin(a) * s,
+      rand(.9, 1.45),
+      hue + i * 5
+    );
+  }
+
+  addRing(x, y, 4 + power * 1.8, hue + 210, .9);
+}
+
+function spiral(x, y, power = 1) {
+  const dir = Math.random() < .5 ? 1 : -1;
+
+  for (let i = 0; i < 30; i++) {
+    const a = i * .52 * dir;
+    const s = .8 + i * .034 + power * .35;
+
+    addParticle(
+      x,
+      y,
+      Math.cos(a) * s,
+      Math.sin(a) * s,
+      rand(1.1, 1.85),
+      hue + i * 7,
+      dir * .02
+    );
+  }
+
+  addRing(x, y, 2.8 + power, hue + 60, 1);
+}
+
+function lightning(x, y, power = 1) {
+  const branchCount = Math.floor(5 + power * 5);
+  const baseHue = hue + rand(180, 245);
+
+  for (let b = 0; b < branchCount; b++) {
+    let cx = x;
+    let cy = y;
+    let angle = rand(0, Math.PI * 2);
+    const length = rand(90, 160 + power * 65);
+    const points = [{ x: cx, y: cy }];
+
+    for (let i = 0; i < 8; i++) {
+      angle += rand(-.45, .45);
+      cx += Math.cos(angle) * length / 8 + rand(-14, 14);
+      cy += Math.sin(angle) * length / 8 + rand(-14, 14);
+      points.push({ x: cx, y: cy });
+
+      if (Math.random() < .3) {
+        let sx = cx;
+        let sy = cy;
+        let side = angle + rand(-1.35, 1.35);
+        const sub = [{ x: sx, y: sy }];
+
+        for (let j = 0; j < 3; j++) {
+          sx += Math.cos(side) * rand(14, 32);
+          sy += Math.sin(side) * rand(14, 32);
+          sub.push({ x: sx, y: sy });
+        }
+
+        bolts.push({
+          points: sub,
+          life: rand(.45, .8),
+          hue: baseHue + rand(-30, 30),
+          width: rand(.7, 1.3)
+        });
+      }
+    }
+
+    bolts.push({
+      points,
+      life: rand(.65, 1),
+      hue: baseHue,
+      width: rand(1.2, 2.4)
+    });
+  }
+
+  for (let i = 0; i < 28 + power * 24; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(2.6, 7 + power * 1.8);
+
+    addSpark(
+      x,
+      y,
+      Math.cos(a) * s,
+      Math.sin(a) * s,
+      rand(.35, .85),
+      baseHue + rand(-60, 60)
+    );
+  }
+
+  addRing(x, y, 6 + power * 2, baseHue, .65);
+  trim(bolts, MAX_BOLTS);
+}
+
+function randomEffect(x, y, power = 1) {
+  const r = Math.random();
+
+  if (r < .34) bloom(x, y, power);
+  else if (r < .68) spiral(x, y, power);
+  else lightning(x, y, power);
+
+  capParticles();
+}
+
+function musicVisuals(beat) {
+  if (player.paused) return;
+
+  const power = Math.min(2.8, .75 + smoothBass * 2.7 + buildup);
+  const cx = w / 2 + Math.cos(frame * .012) * w * .28;
+  const cy = h / 2 + Math.sin(frame * .014) * h * .28;
+
+  if (frame % 2 === 0) {
+    addFlow(cx + rand(-90, 90), cy + rand(-90, 90), smoothHighs > .22 ? 2 : 1);
+  }
+
+  if (beat) {
+    randomEffect(rand(w * .16, w * .84), rand(h * .16, h * .84), power);
+  }
+
+  if (smoothBass > .34 && frame % 38 === 0) {
+    bloom(rand(w * .18, w * .82), rand(h * .18, h * .82), power);
+  }
+
+  if (buildup > .55 && frame % 54 === 0) {
+    lightning(rand(w * .18, w * .82), rand(h * .18, h * .82), power);
+  }
+
+  capParticles();
+}
+
+function manualMove(x, y) {
+  if (lastX !== null) {
+    const dx = x - lastX;
+    const dy = y - lastY;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > 5) {
+      const steps = Math.min(4, Math.floor(dist / 24) + 1);
+
+      for (let i = 0; i < steps; i++) {
+        const t = i / steps;
+        addFlow(lastX + dx * t, lastY + dy * t, 1);
+      }
+
+      if (pointerDown && frame - lastManualEffect > 16 && Math.random() < .08) {
+        randomEffect(x, y, 1);
+        lastManualEffect = frame;
+      }
+
+      capParticles();
+    }
+  }
+
+  lastX = x;
+  lastY = y;
+}
+
+window.addEventListener("pointerdown", e => {
+  if (e.target.closest("#panel") || e.target.closest("#menuBtn") || e.target.closest("#player")) return;
+
+  pointerDown = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  randomEffect(e.clientX, e.clientY, 1);
+});
+
+window.addEventListener("pointermove", e => {
+  if (e.target.closest("#panel") || e.target.closest("#menuBtn") || e.target.closest("#player")) return;
+  manualMove(e.clientX, e.clientY);
+});
+
+window.addEventListener("pointerup", () => {
+  pointerDown = false;
+  lastX = null;
+  lastY = null;
+});
+
+function drawBackground() {
+  const fade = Number(fadeSlider.value) / 100;
+  ctx.fillStyle = `rgba(0,0,0,${fade})`;
+  ctx.fillRect(0, 0, w, h);
+
+  if (frame % 2 === 0) {
+    const glow = .035 + smoothBass * .12 + buildup * .04;
+    const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * .56);
+
+    g.addColorStop(0, `hsla(${hue + 160},100%,32%,${glow})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+function drawRings() {
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const r = rings[i];
+
+    r.r += r.speed * (1 + smoothBass * .7);
+    r.life -= .009;
+
+    if (r.life <= 0 || r.r > Math.max(w, h) * .75) {
+      rings[i] = rings[rings.length - 1];
+      rings.pop();
+      continue;
+    }
+
+    const wobble = Math.sin(frame * .035 + r.phase) * (8 + smoothMids * 15);
+
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.r + wobble, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${r.hue},100%,64%,${r.life * .52})`;
+    ctx.lineWidth = 1.3 + smoothBass;
+    ctx.stroke();
+
+    const start = frame * .035 * r.spin + r.phase;
+
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.r * .64, start, start + Math.PI * 1.35);
+    ctx.strokeStyle = `hsla(${r.hue + 85},100%,60%,${r.life * .3})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function drawBolts() {
+  for (let i = bolts.length - 1; i >= 0; i--) {
+    const b = bolts[i];
+
+    b.life -= .052;
+
+    if (b.life <= 0) {
+      bolts[i] = bolts[bolts.length - 1];
+      bolts.pop();
+      continue;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(b.points[0].x, b.points[0].y);
+
+    for (let j = 1; j < b.points.length; j++) {
+      const p = b.points[j];
+      ctx.lineTo(p.x + rand(-2, 2), p.y + rand(-2, 2));
+    }
+
+    ctx.strokeStyle = `hsla(${b.hue},100%,72%,${b.life * .75})`;
+    ctx.lineWidth = b.width + smoothBass;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(b.points[0].x, b.points[0].y);
+
+    for (let j = 1; j < b.points.length; j++) {
+      const p = b.points[j];
+      ctx.lineTo(p.x + rand(-.8, .8), p.y + rand(-.8, .8));
+    }
+
+    ctx.strokeStyle = `rgba(255,255,255,${b.life * .42})`;
+    ctx.lineWidth = .5;
+    ctx.stroke();
+  }
+}
+
+function drawSparks() {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+
+    s.px = s.x;
+    s.py = s.y;
+    s.x += s.vx;
+    s.y += s.vy;
+    s.vx *= .94;
+    s.vy *= .94;
+    s.life -= .036;
+
+    if (s.life <= 0) {
+      sparks[i] = sparks[sparks.length - 1];
+      sparks.pop();
+      continue;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(s.px, s.py);
+    ctx.lineTo(s.x, s.y);
+    ctx.strokeStyle = `hsla(${s.hue},100%,70%,${s.life})`;
+    ctx.lineWidth = 1.15;
+    ctx.stroke();
+  }
+}
+
+function drawParticles() {
+  const baseDist = 108 * (Number(intensitySlider.value) / 100);
+  const maxDist = baseDist * (1 + smoothMids * .25);
+  const maxSq = maxDist * maxDist;
+  const cellSize = maxDist;
+
+  const grid = new Map();
+  let write = 0;
+
+  for (let read = 0; read < particles.length; read++) {
+    const p = particles[read];
+
+    p.px = p.x;
+    p.py = p.y;
+
+    if (p.spin) {
+      const c = Math.cos(p.spin);
+      const s = Math.sin(p.spin);
+      const vx = p.vx * c - p.vy * s;
+      const vy = p.vx * s + p.vy * c;
+
+      p.vx = vx;
+      p.vy = vy;
+    }
+
+    p.x += p.vx * (1 + smoothBass * .24);
+    p.y += p.vy * (1 + smoothBass * .24);
+    p.vx *= .989;
+    p.vy *= .989;
+    p.life -= .0062;
+
+    if (p.life > 0 && p.x > -100 && p.x < w + 100 && p.y > -100 && p.y < h + 100) {
+      particles[write] = p;
+
+      const key = Math.floor(p.x / cellSize) + "," + Math.floor(p.y / cellSize);
+      let bucket = grid.get(key);
+
+      if (!bucket) {
+        bucket = [];
+        grid.set(key, bucket);
+      }
+
+      bucket.push(write);
+      write++;
+    }
+  }
+
+  particles.length = write;
+
+  let lines = 0;
+
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const alpha = Math.min(1, p.life / p.maxLife);
+
+    ctx.beginPath();
+    ctx.moveTo(p.px, p.py);
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = `hsla(${p.hue},100%,64%,${alpha * .72})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    const cx = Math.floor(p.x / cellSize);
+    const cy = Math.floor(p.y / cellSize);
+
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const bucket = grid.get(gx + "," + gy);
+        if (!bucket) continue;
+
+        for (let k = 0; k < bucket.length; k++) {
+          const j = bucket[k];
+          if (j <= i) continue;
+
+          const q = particles[j];
+          const dx = p.x - q.x;
+          const dy = p.y - q.y;
+          const distSq = dx * dx + dy * dy;
+
+          if (distSq < maxSq) {
+            const a = (1 - distSq / maxSq) * .24 * p.life * q.life;
+
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = `hsla(${(p.hue + q.hue) / 2},100%,60%,${a})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            lines++;
+            if (lines > LINE_BUDGET) return;
+          }
+        }
+      }
+    }
+  }
+}
+
+function draw() {
+  frame++;
+  hue = (hue + .42 + smoothHighs * 1.4) % 360;
+
+  const beat = analyzeSong();
+
+  drawBackground();
+  musicVisuals(beat);
+
+  drawRings();
+  drawBolts();
+  drawSparks();
+  drawParticles();
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
